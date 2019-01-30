@@ -1,0 +1,1623 @@
+---
+title: "WAIC for Greta"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Calculate WAIC
+```{r}
+# Data
+data(cars)
+car_df <- cars
+head(car_df)
+dist = car_df$dist
+speed = car_df$speed
+
+#prior
+a = normal(0,100)
+b = normal(0,10)
+sigm = uniform(0,30)
+mu = a + b * speed
+
+# likelihood
+distribution(dist) = normal(mu, sigm)
+
+#model
+m1 <- model(a, b, sigm)
+
+#MCMC Draw
+draws1 <- greta::mcmc(m1, n_samples = 4000)
+
+#Posterior tible
+draws1 <- tidy_draws(draws1)
+
+# Create a log-likelihood matrix
+num_sample = 1000
+
+log_likelihood_matrix <- draws1 %>%
+  sample_n(num_sample) %>%
+  mutate(y_i = list(car_df$dist),
+         x_i = list(car_df$speed)) %>%
+  unnest() %>%
+  mutate(mu = a + b * x_i,
+         den = dnorm(y_i, mu, sigm),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = num_sample)
+
+
+# Create function to calculate WAIC with log_likehood_matrix
+
+WAIC_greta <- function(log_likelihood_matrix) {
+  
+  n_obs = nrow(log_likelihood_matrix)
+  num_sample = ncol(log_likelihood_matrix)
+  
+  lppd = rep(0, n_obs)
+  pWAIC = rep(0, n_obs)
+  
+  var2 <- function( x , na.rm=TRUE ) {
+    # use E(x^2) - E(x)^2 form
+    mean(x^2) - mean(x)^2
+}
+
+  for (i in 1: n_obs){
+  lppd[i] = log(sum(exp(log_likelihood_matrix[i,]))) - log(num_sample)
+  pWAIC[i] = var2(log_likelihood_matrix[i,])
+  }
+  
+  waic_vec <- -2*(lppd - pWAIC)
+  
+  return(data.frame(WAIC = -2*(sum(lppd) - sum(pWAIC)),
+                    lppd = sum(lppd),
+                    pWAIC = sum(pWAIC),
+                    se = sqrt(n_obs * var2(waic_vec)),
+                    n_obs = n_obs))
+}
+
+
+
+
+#Check result
+(WAIC_cars_model <- WAIC_greta(log_likelihood_matrix))
+
+```
+
+
+
+## Compare model with Milk dataset
+```{r}
+# Data
+data("milk")
+milk_df <- milk
+milk_df <- milk[complete.cases(milk_df),]
+milk_df$neocortex <- milk_df$neocortex.perc / 100
+dim(milk_df)
+head(milk_df)
+
+neo <- milk_df$neocortex
+mas <- milk_df$mass
+a.start = mean(milk_df$kcal.per.g)
+sigma.start = log(sd(milk_df$kcal.per.g))
+
+
+y_i_model_1 <- milk_df$kcal.per.g 
+y_i_model_2 <- milk_df$kcal.per.g
+y_i_model_3 <- milk_df$kcal.per.g
+y_i_model_4 <- milk_df$kcal.per.g
+
+#priors
+log.sigma_1 <- variable()
+log.sigma_2 <- variable()
+log.sigma_3 <- variable()
+log.sigma_4 <- variable()
+
+a_1 <- variable()
+a_2 <- variable()
+a_3 <- variable()
+a_4 <- variable()
+
+bn_2 <- variable()
+bn_4 <- variable()
+
+bm_3 <- variable()
+bm_4 <- variable()
+
+#operations
+mu_neo <- a_2 + bn_2 * neo
+mu_mas <- a_3 + bm_3 * log(mas)
+mu_neo_mas <- a_4 + bn_4 * neo + bm_4 * log(mas)
+
+#likelihood
+distribution(y_i_model_1) <- normal(mean = a_1, sd = exp(log.sigma_1))
+
+distribution(y_i_model_2) <- normal(mean = mu_neo, sd = exp(log.sigma_2))
+
+distribution(y_i_model_3) <- normal(mean = mu_mas, sd = exp(log.sigma_3))
+
+distribution(y_i_model_4) <- normal(mean = mu_neo_mas, sd = exp(log.sigma_4))
+
+#models
+milk_model_1 <- model(a_1, log.sigma_1)
+milk_model_2 <- model(a_2, bn_2, log.sigma_2)
+milk_model_3 <- model(a_3, bm_3, log.sigma_3)
+milk_model_4 <- model(a_4, bn_4, bm_4, log.sigma_4)
+
+#draws
+milk_draws_1 <- greta::mcmc(milk_model_1, n_samples = 4000, initial_values = initials(a_1 = a.start, log.sigma_1 = sigma.start))
+
+milk_draws_2 <- greta::mcmc(milk_model_2, n_samples = 4000, initial_values = initials(a_2 = a.start, bn_2 =0, log.sigma_2 = sigma.start))
+
+milk_draws_3 <- greta::mcmc(milk_model_3, n_samples = 4000, initial_values = initials(a_3 = a.start, bm_3 = 0, log.sigma_3 = sigma.start))
+
+milk_draws_4 <- greta::mcmc(milk_model_4, n_samples = 4000, initial_values = initials(a_4 = a.start, bn_4 = 0, bm_4 = 0, log.sigma_4 = sigma.start))
+
+
+summary(milk_draws_1)
+summary(milk_draws_2)
+summary(milk_draws_3)
+summary(milk_draws_4)
+
+# tidy draws
+milk_draws_1 <- tidy_draws(milk_draws_1)
+milk_draws_2 <- tidy_draws(milk_draws_2)
+milk_draws_3 <- tidy_draws(milk_draws_3)
+milk_draws_4 <- tidy_draws(milk_draws_4)
+
+# Create log_likelihood_matrix
+num_sample <- 1000
+
+milk_log_likelihood_matrix_1 <- milk_draws_1 %>%
+  sample_n(num_sample) %>%
+  mutate(y_i = list(y_i_model_1)) %>%
+  unnest() %>%
+  mutate(den = dnorm(y_i, a_1, exp(log.sigma_1)),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = num_sample)
+  
+milk_log_likelihood_matrix_2 <- milk_draws_2 %>%
+  sample_n(num_sample) %>%
+  mutate(y_i = list(y_i_model_2),
+         x_n = list(neo)) %>%
+  unnest() %>%
+  mutate(mu = a_2 + bn_2 * x_n,
+         den = dnorm(y_i, mu, exp(log.sigma_2)),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = num_sample)
+
+milk_log_likelihood_matrix_3 <- milk_draws_3 %>%
+  sample_n(num_sample) %>%
+  mutate(y_i = list(y_i_model_3),
+         x_m = list(mas)) %>%
+  unnest() %>%
+  mutate(mu = a_3 + bm_3 * log(x_m),
+         den = dnorm(y_i, mu, exp(log.sigma_3)),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = num_sample)
+
+milk_log_likelihood_matrix_4 <- milk_draws_4 %>%
+  sample_n(num_sample) %>%
+  mutate(y_i = list(y_i_model_4),
+         x_n = list(neo),
+         x_m = list(mas)) %>%
+  unnest() %>%
+  mutate(mu = a_4 + bn_4 * x_n + bm_4 * log(x_m),
+         den = dnorm(y_i, mu, exp(log.sigma_4)),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = num_sample)
+
+# Calculate WAIC and put them in matrix
+comp <- rbind(WAIC_greta(milk_log_likelihood_matrix_1),
+WAIC_greta(milk_log_likelihood_matrix_2),
+WAIC_greta(milk_log_likelihood_matrix_3),
+WAIC_greta(milk_log_likelihood_matrix_4))
+
+comp$model <- c("model1", "model2", "model3", "model4")
+
+# Sort WAIC in ascending 
+sorted_comp <- comp[order(comp$WAIC),]
+
+# Calculate weight of each model
+sorted_comp <- sorted_comp %>%
+  mutate(w_1 = exp(-0.5 * WAIC),
+         w_2 = w_1 / sum(w_1)) %>%
+  select(model, WAIC, pWAIC, se, n_obs, w_2, -w_1)
+
+sorted_comp
+```
+
+## Ruggedness dataset
+```{r}
+data("rugged")
+rugged_df <- rugged
+#get log of gdp
+rugged_df$log_gdp <- log(rugged_df$rgdppc_2000) 
+rugged_df <- rugged_df[complete.cases(rugged_df$rgdppc_2000),]
+
+
+#Standardize data
+rugged_df$log_gdp_std <- rugged_df$log_gdp / mean(rugged_df$log_gdp)
+
+rugged_df$rugged_std <- rugged_df$rugged / max(rugged_df$rugged)
+
+# Split the countries into Africa and not-Africa
+rugged_df <- rugged_df %>%
+  select(log_gdp_std, rugged_std, cont_africa) %>%
+  mutate(Africa = ifelse(cont_africa == 1, 1, 2))
+
+head(rugged_df)
+#data 
+rugged_y_i_1 = rugged_df$log_gdp_std
+rugged_y_i_2 = rugged_df$log_gdp_std
+rugged_y_i_3 = rugged_df$log_gdp_std
+
+ruggedness <- rugged_df$rugged_std
+Africa <- rugged_df$Africa
+
+#Priors
+a_1 <- normal(1, 0.1)
+b_1 <- normal(0, 0.3)
+a_2 <- normal(mean = 1, sd = 0.1, dim = 2)
+b_2 <- normal(0, 0.3)
+a_3 <- normal(mean = 1, sd = 0.1, dim = 2)
+b_3 <- normal(mean = 0, sd = 0.3, dim = 2)
+
+rugged_sigma_1 <- exponential(1)
+rugged_sigma_2 <- exponential(1)
+rugged_sigma_3 <- exponential(1)
+
+#Operation
+rugged_mu_1 <- a_1 + b_1 * (ruggedness - mean(ruggedness))
+rugged_mu_2 <- a_2[Africa] + b_2 * (ruggedness - mean(ruggedness))
+rugged_mu_3 <- a_3[Africa] + b_3[Africa] * (ruggedness - mean(ruggedness))
+
+#Likelihood
+distribution(rugged_y_i_1) <- normal(mean = rugged_mu_1, sd = rugged_sigma_1)
+
+distribution(rugged_y_i_2) <- normal(mean = rugged_mu_2, sd = rugged_sigma_2)
+
+distribution(rugged_y_i_3) <- normal(mean = rugged_mu_3, sd = rugged_sigma_3)
+
+#model
+rugged_model_1 <- model(a_1, b_1, rugged_sigma_1)
+rugged_model_2 <- model(a_2, b_2, rugged_sigma_2)
+rugged_model_3 <- model(a_3, b_3, rugged_sigma_3)
+
+#draws
+rugged_draws_1 <- greta::mcmc(rugged_model_1, n_samples = 4000)
+rugged_draws_2 <- greta::mcmc(rugged_model_2, n_samples = 4000)
+rugged_draws_3 <- greta::mcmc(rugged_model_3, n_samples = 4000)
+
+#tidy draws
+rugged_draws_1_df <- tidy_draws(rugged_draws_1)
+rugged_draws_2_df <- tidy_draws(rugged_draws_2)
+rugged_draws_3_df <- tidy_draws(rugged_draws_3)
+
+head(rugged_draws_1)
+head(rugged_draws_2)
+head(rugged_draws_3)
+
+# Create log_likelihood_matrix for model1
+num_sample <- 1000
+
+rugged_log_likelihood_matrix_1 <- rugged_draws_1_df %>%
+  sample_n(num_sample) %>%
+  mutate(y_i = list(rugged_y_i_1)) %>%
+  unnest() %>%
+  mutate(mu = a_1 + b_1 * (ruggedness - mean(ruggedness)),
+         den = dnorm(y_i, mu, rugged_sigma_1),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = num_sample)
+
+# Create log_likelihood matrix for model 2
+rugged_drawSampleIDs <- sample(1:ncol(rugged_draws_2_df), size = 1000)
+
+rugged_log_likelihood_matrix_2 <- rugged_draws_2 %>%
+  gather_draws(a_2[Africa, notNeeded]) %>%
+  spread(key = .variable, value = .value) %>%
+  filter(.draw %in% rugged_drawSampleIDs) %>%
+  sample_n(num_sample) %>%
+  arrange(.draw) %>%
+  left_join(rugged_draws_2_df) %>%
+  left_join(rugged_df) %>%
+  mutate(mu = a_2 + b_2 * (rugged_std - mean(rugged_std)),
+         den = dnorm(log_gdp_std, mu, rugged_sigma_2),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 1000)
+
+
+# Create log_likelihood matrix for model 3
+
+rugged_log_likelihood_matrix_3 <- rugged_draws_3 %>%
+  gather_draws(a_3[Africa, notNeeded], b_3[Africa, notNeeded]) %>%
+  spread(key = .variable, value = .value) %>%
+  filter(.draw %in% rugged_drawSampleIDs) %>%
+  sample_n(num_sample) %>%
+  arrange(.draw) %>%
+  left_join(rugged_draws_3_df) %>%
+  left_join(rugged_df) %>%
+  mutate(mu = a_3 + b_3 * (rugged_std - mean(rugged_std)),
+         den = dnorm(log_gdp_std, mu, rugged_sigma_3),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 1000)
+
+str(rugged_log_likelihood_matrix_3)
+
+WAIC_greta(rugged_log_likelihood_matrix_1)
+WAIC_greta(rugged_log_likelihood_matrix_2)
+WAIC_greta(rugged_log_likelihood_matrix_3)
+
+# Calculate WAIC and put them in matrix
+comp <- rbind(WAIC_greta(rugged_log_likelihood_matrix_1),
+WAIC_greta(rugged_log_likelihood_matrix_2),
+WAIC_greta(rugged_log_likelihood_matrix_3))
+
+comp$model <- c("model1", "model2", "model3")
+
+# Sort WAIC in ascending 
+sorted_comp <- comp[order(comp$WAIC),]
+
+# Calculate weight of each model
+sorted_comp <- sorted_comp %>%
+  mutate(w_1 = exp(-0.5 * WAIC),
+         w_2 = round(w_1 / sum(w_1),2)) %>%
+  select(model, WAIC, pWAIC, se, n_obs, w_2, -w_1)
+
+sorted_comp
+```
+
+## The tulips dataset
+```{r}
+data("tulips")
+tulips_df <- tulips
+
+tulips_df$blooms_std <- tulips_df$blooms / max(tulips_df$blooms)
+tulips_df$water_cent <- tulips_df$water - mean(tulips_df$water)
+tulips_df$shade_cent <- tulips_df$shade - mean(tulips_df$shade)
+
+#priors
+tulips_alpha = normal(0.5, 0.25)
+tulips_beta_water = normal(0, 0.25)
+tulips_beta_shade = normal(0, 0.25)
+tulips_beta_water_shade = normal(0, 0.25)
+tulips_sigma = exponential(1)
+
+#operation
+tulips_mu = tulips_alpha + tulips_beta_water * tulips_df$water_cent + tulips_beta_shade * tulips_df$shade_cent + tulips_beta_water_shade * tulips_df$water_cent * tulips_df$shade_cent
+
+# likelihood
+distribution(tulips_df$blooms_std) <- normal(tulips_mu, tulips_sigma)
+
+# model
+tulips_model <- model(tulips_alpha, tulips_beta_water, tulips_beta_shade, tulips_beta_water_shade, tulips_sigma)
+
+# draws
+tulips_draws <- greta::mcmc(tulips_model, n_samples = 1000)
+
+#tidy draws
+tulips_draws_df <- tidy_draws(tulips_draws)
+head(tulips_draws_df)
+str(tulips_draws_df)
+
+#plot
+tulips_sample_ID <- sample(1:nrow(tulips_draws_df), size = 20)
+
+tulips_sample_df <- tulips_draws_df %>%
+  filter(.draw %in% tulips_sample_ID) %>%
+  select(tulips_alpha, tulips_beta_water, tulips_beta_shade, tulips_beta_water_shade, tulips_sigma) %>%
+  mutate(water = list(c(-1,0,1))) %>%
+  unnest()
+
+plot_list = list()
+
+for ( i in c(-1,0,1)) {
+ idx <- which(tulips_df$shade_cent == i)
+  plot_df <- data.frame(water_cent = tulips_df$water_cent[idx],
+                        bloom_std = tulips_df$blooms_std[idx])
+  
+  plot_df_merged <- tulips_sample_df %>%
+    mutate(data = list(data = plot_df)) %>%
+    unnest() %>%
+    mutate(mu = tulips_alpha + tulips_beta_shade * i + tulips_beta_water * water_cent + tulips_beta_water_shade * i * water_cent,
+           intercept = tulips_alpha + tulips_beta_shade * i,
+           coef = tulips_beta_water + tulips_beta_water_shade * 1)
+  
+    p = ggplot(plot_df, aes(x = water_cent, y = bloom_std)) +
+      geom_point(color = "blue") +
+      geom_abline(data = plot_df_merged, aes(intercept = intercept, slope = coef)) +      
+      scale_y_continuous(breaks = c(0, 0.5, 1),limits = c(0,1)) +
+      scale_x_continuous(breaks = c(-1, 0, 1))
+
+   ggsave(p, filename = paste("plot", i+2, ".png"))
+}
+
+
+```
+
+## Chimpanzee dataset 3 models, not accounting for handedness
+```{r}
+data("chimpanzees")
+chimp <- chimpanzees
+
+#data
+chimp_y_i_1 <- chimp$pulled_left
+chimp_y_i_2 <- chimp$pulled_left
+chimp_y_i_3 <- chimp$pulled_left
+chimp_prosoc_i <- chimp$prosoc_left
+chimp_con_i <- chimp$condition
+
+#prior
+chimp_a_1 <- normal(0, 10)
+chimp_a_2 <- normal(0, 10)
+chimp_a_3 <- normal(0, 10)
+
+chimp_bp_2 <- normal(0, 10)
+chimp_bp_3 <- normal(0, 10)
+chimp_bpC_3 <- normal(0, 10)
+
+#operations
+chimp_logit_p_1 <- chimp_a_1
+chimp_logit_p_2 <- chimp_a_2 + chimp_bp_2 * chimp_prosoc_i
+chimp_logit_p_3 <- chimp_a_3 + chimp_bp_3 * chimp_prosoc_i + chimp_bpC_3 * chimp_prosoc_i * chimp_con_i
+
+chimp_p_1 <- psych::logistic(chimp_logit_p_1)
+chimp_p_2 <- psych::logistic(chimp_logit_p_2)
+chimp_p_3 <- psych::logistic(chimp_logit_p_3)
+
+#likelihood
+distribution(chimp_y_i_1) <- binomial(1, chimp_p_1)
+distribution(chimp_y_i_2) <- binomial(1, chimp_p_2)
+distribution(chimp_y_i_3) <- binomial(1, chimp_p_3)
+
+#model
+chimp_model_1 <- model(chimp_a_1)
+chimp_model_2 <- model(chimp_a_2, chimp_bp_2)
+chimp_model_3 <- model(chimp_a_3, chimp_bp_3, chimp_bpC_3)
+
+#draws
+chimp_draws_1 <- greta::mcmc(chimp_model_1)
+chimp_draws_2 <- greta::mcmc(chimp_model_2)
+chimp_draws_3 <- greta::mcmc(chimp_model_3)
+
+
+#tidy draws
+chimp_draws_1_df <- tidy_draws(chimp_draws_1)
+chimp_draws_2_df <- tidy_draws(chimp_draws_2)
+chimp_draws_3_df <- tidy_draws(chimp_draws_3)
+
+cowplot::plot_grid(mcmc_intervals(chimp_draws_3_df, regex_pars = "chimp"), mcmc_intervals(chimp_draws_2_df, regex_pars = "chimp"))
+
+# create likelihood matrix
+chimp_drawSampleIDs <- sample(1:nrow(chimp_draws_1_df), size = 1000)
+
+chimp_log_likelihood_matrix_1 <- chimp_draws_1_df %>%
+  filter(.draw %in% chimp_drawSampleIDs) %>%
+  mutate(y_i = list(chimp_y_i_1)) %>%
+  unnest() %>%
+  mutate(p = psych::logistic(chimp_a_1),
+         den = dbinom(y_i, 1, prob = p),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 1000)
+
+chimp_log_likelihood_matrix_2 <- chimp_draws_2_df %>%
+  filter(.draw %in% chimp_drawSampleIDs) %>%
+  mutate(y_i = list(chimp_y_i_2)) %>%
+  unnest() %>%
+  mutate(p = psych::logistic(chimp_a_2 + chimp_bp_2 * chimp_prosoc_i),
+         den = dbinom(y_i, 1, prob = p),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 1000)
+
+chimp_log_likelihood_matrix_3 <- chimp_draws_3_df %>%
+  filter(.draw %in% chimp_drawSampleIDs) %>%
+  mutate(y_i = list(chimp_y_i_3)) %>%
+  unnest() %>%
+  mutate(p = psych::logistic(chimp_a_3 + chimp_bp_3 * chimp_prosoc_i + chimp_bpC_3 * chimp_prosoc_i * chimp_con_i),
+         den = dbinom(y_i, 1, prob = p),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 1000)
+
+# Calculate WAIC and put them in matrix
+chimp_comp <- rbind(WAIC_greta(chimp_log_likelihood_matrix_1),
+WAIC_greta(chimp_log_likelihood_matrix_2),
+WAIC_greta(chimp_log_likelihood_matrix_3))
+
+chimp_comp$model <- c("model1", "model2", "model3")
+
+# Sort WAIC in ascending 
+chimp_sorted_comp <- chimp_comp[order(chimp_comp$WAIC),]
+
+# Calculate weight of each model
+chimp_sorted_comp <- chimp_sorted_comp %>%
+  mutate(w_1 = exp(-0.5 * WAIC),
+         w_2 = round(w_1 / sum(w_1),2)) %>%
+  select(model, WAIC, pWAIC, se, n_obs, w_2, -w_1)
+
+chimp_sorted_comp
+
+# plot the chimp data
+chimp_plot <- chimp %>%
+  group_by(actor, condition, prosoc_left) %>%
+  summarize(n = n(),
+            pull = sum(pulled_left),
+            prop_pull = pull/n)
+chimp_plot$x <- seq(c(1:4))
+
+# Average of posterior predictive check
+Averg_post_check <- chimp_draws_1_df %>%
+  left_join(chimp_draws_2_df) %>%
+  left_join(chimp_draws_3_df) %>%
+  mutate(prosoc_left = list(rep(c(0,1, 0, 1), length = 28)),
+         condition = list(rep(c(0, 0, 1, 1), length = 28)),
+         actor = list(rep(c(1:7), each = 4 ))) %>%
+  unnest() %>%
+  mutate(p_1 = psych::logistic(chimp_a_1),
+         p_2 = psych::logistic(chimp_a_2 + chimp_bp_2 * prosoc_left),
+         p_3 = psych::logistic(chimp_a_3 + chimp_bp_3 * prosoc_left + chimp_bpC_3 * prosoc_left * condition),
+         average_p = 0.68 * p_2 + 0.3 * p_3 + 0.02 * p_1) %>%
+  group_by(condition, prosoc_left) %>%
+  summarise(prop_pull = mean(average_p),
+            sd_prop = sd(average_p))
+
+Averg_post_check$x <- seq(c(1:4))
+
+# Plot all in the same graph
+ggplot(data = chimp_plot, aes( x = x, y = prop_pull)) +
+  geom_line(aes(group = actor), color = "blue") +
+  scale_y_continuous(breaks = c(0, 0.2, 0.4, 0.6, 0.8, 1)) +
+  scale_x_continuous(labels = c("0/0", "1/0", "0/1", "1/1")) +
+  xlab("prosoc_left/condition") +
+  geom_line(data = Averg_post_check, aes(x = x, y = prop_pull)) +
+  geom_ribbon(data = Averg_post_check, aes(x = x, ymin = prop_pull - 2 * sd_prop, ymax = prop_pull + 2 * sd_prop), fill = "grey70", alpha = 0.5)
+
+```
+
+
+## Chimpazee dataset accounting for handedness
+
+```{r}
+#data
+chimp_y_i_4 <- chimp$pulled_left
+chimp_actor <- chimp$actor
+
+#prior
+chimp_a_4 <- normal(0, 10, dim = 7)
+chimp_bp_4 <- normal(0, 10)
+chimp_bpC_4 <- normal(0, 10)
+
+#operations
+chimp_logit_p_4 <- chimp_a_4[chimp_actor] + chimp_bp_4 * chimp_prosoc_i + chimp_bpC_4 * chimp_prosoc_i * chimp_con_i
+
+chimp_p_4 <- psych::logistic(chimp_logit_p_4)
+
+#likelihood
+distribution(chimp_y_i_4) <- binomial(1, chimp_p_4)
+
+#model
+chimp_model_4 <- model(chimp_a_4, chimp_bp_4, chimp_bpC_4)
+
+#draws
+chimp_draws_4 <- greta::mcmc(chimp_model_4)
+summary(chimp_draws_4)
+
+#tidy draws
+chimp_draws_4_df <- tidy_draws(chimp_draws_4)
+
+# plot the chimp data
+chimp_handedness_plot <- chimp %>%
+  filter(actor %in% c(3, 5, 6, 7)) %>%
+  group_by(actor, condition, prosoc_left) %>%
+  summarize(n = n(),
+            pull = sum(pulled_left),
+            prop_pull = pull/n)
+
+chimp_handedness_plot$x <- seq(c(1:4))
+
+head(chimp_handedness_plot)
+head(chimp_draws_4_df)
+head(Chimp_post_check_handedness)
+
+# Posterior predictive check
+Chimp_post_check_handedness <- chimp_draws_4 %>%
+  gather_draws(chimp_a_4[actor,notNeed]) %>%
+  spread(key = .variable, value = .value) %>%
+  left_join(chimp_draws_4_df) %>%
+  filter(actor %in% c(3, 5, 6, 7)) %>%
+  mutate(prosoc_left = list(c(0,1, 0, 1)),
+         condition = list(c(0, 0, 1, 1))) %>%
+  unnest() %>%
+  mutate(p_4 = psych::logistic(chimp_a_4 + chimp_bp_4 * prosoc_left + chimp_bpC_4 * prosoc_left * condition)) %>%
+  group_by(actor, condition, prosoc_left) %>%
+  summarise(prop_pull = mean(p_4),
+            sd_prop = sd(p_4))
+
+Chimp_post_check_handedness$x <- rep(c(1:4), length = 16)
+
+# Plot all in the same graph
+ggplot(data = chimp_handedness_plot, aes( x = x, y = prop_pull)) +
+  geom_line(aes(group = actor), color = "blue") +
+  scale_y_continuous(breaks = c(0, 0.2, 0.4, 0.6, 0.8, 1)) +
+  scale_x_continuous(labels = c("0/0", "1/0", "0/1", "1/1")) +
+  xlab("prosoc_left/condition") +
+  facet_wrap( ~ actor, labeller = label_both) +
+  geom_line(data = Chimp_post_check_handedness, aes(x = x, y = prop_pull)) +
+  geom_ribbon(data = Chimp_post_check_handedness, aes(x = x, ymin = prop_pull - 2 * sd_prop, ymax = prop_pull + 2 * sd_prop), fill = "grey70", alpha = 0.5)
+
+```
+
+
+## Graduate School Admissions
+```{r}
+data("UCBadmit")
+Admit <- UCBadmit
+Admit$male <- ifelse(Admit$applicant.gender == "male", 1, 0)
+Admit$school_id <- rep(c(1:6), each = 2)
+head(Admit)
+
+#data
+Admit_y_i_1 <- Admit$admit
+Admit_y_i_2 <- Admit$admit
+Admit_y_i_3 <- Admit$admit
+Admit_y_i_4 <- Admit$admit
+
+Admit_applic_i <- Admit$applications
+Admit_male_i <- Admit$male
+Admit_School_ID <- Admit$school_id
+Admit_num_school <- length(unique(Admit_School_ID))
+
+#prior
+Admit_a_1 <- normal(0, 10)
+Admit_a_2 <- normal(0, 10)
+Admit_a_3 <- normal(0, 10, dim = Admit_num_school)
+Admit_a_4 <- normal(0, 10, dim = Admit_num_school)
+
+Admit_bm_2 <- normal(0, 10)
+Admit_bm_4 <- normal(0, 10)
+
+#operations
+Admit_logit_p_1 <- Admit_a_1
+Admit_logit_p_2 <- Admit_a_2 + Admit_bm_2 * Admit_male_i
+Admit_logit_p_3 <- Admit_a_3[Admit_School_ID] 
+Admit_logit_p_4 <- Admit_a_4[Admit_School_ID] + Admit_bm_4 * Admit_male_i
+
+Admit_p_1 <- psych::logistic(Admit_logit_p_1)
+Admit_p_2 <- psych::logistic(Admit_logit_p_2)
+Admit_p_3 <- psych::logistic(Admit_logit_p_3)
+Admit_p_4 <- psych::logistic(Admit_logit_p_4)
+
+#likelihood
+distribution(Admit_y_i_1) <- binomial(Admit_applic_i, Admit_p_1)
+distribution(Admit_y_i_2) <- binomial(Admit_applic_i, Admit_p_2)
+distribution(Admit_y_i_3) <- binomial(Admit_applic_i, Admit_p_3)
+distribution(Admit_y_i_4) <- binomial(Admit_applic_i, Admit_p_4)
+
+#model
+Admit_model_1 <- model(Admit_a_1)
+Admit_model_2 <- model(Admit_a_2, Admit_bm_2)
+Admit_model_3 <- model(Admit_a_3)
+Admit_model_4 <- model(Admit_a_4, Admit_bm_4)
+
+#draws
+Admit_draws_1 <- greta::mcmc(Admit_model_1)
+Admit_draws_2 <- greta::mcmc(Admit_model_2)
+Admit_draws_3 <- greta::mcmc(Admit_model_3)
+Admit_draws_4 <- greta::mcmc(Admit_model_4)
+
+#tidy draws
+Admit_draws_1_df <- tidy_draws(Admit_draws_1)
+Admit_draws_2_df <- tidy_draws(Admit_draws_2)
+Admit_draws_3_df <- tidy_draws(Admit_draws_3)
+Admit_draws_4_df <- tidy_draws(Admit_draws_4)
+
+# create likelihood matrix
+Admit_drawSampleIDs <- sample(1:nrow(Admit_draws_1_df), size = 1000)
+
+
+Admit_log_likelihood_matrix_1 <- Admit_draws_1_df %>%
+  filter(.draw %in% Admit_drawSampleIDs) %>%
+  mutate(y_i = list(Admit_y_i_1),
+         n_apply_i = list(Admit_applic_i)) %>%
+  unnest() %>%
+  mutate(p = psych::logistic(Admit_a_1),
+         den = dbinom(x = y_i, size = n_apply_i, prob = p),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 1000)
+
+
+Admit_log_likelihood_matrix_2 <- Admit_draws_2_df %>%
+  filter(.draw %in% Admit_drawSampleIDs) %>%
+  mutate(y_i = list(Admit_y_i_2),
+         n_apply_i = list(Admit_applic_i),
+         male_i = list(Admit_male_i)) %>%
+  unnest() %>%
+  mutate(p = psych::logistic(Admit_a_2 + Admit_bm_2 * male_i),
+         den = dbinom(y_i, n_apply_i, prob = p),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 1000)
+
+
+Admit_log_likelihood_matrix_3 <- Admit_draws_3 %>%
+  gather_draws(Admit_a_3[school_id,notNeed]) %>%
+  spread(key = .variable, value = .value) %>%
+  left_join(Admit) %>%
+  filter(.draw %in% Admit_drawSampleIDs)%>%
+  mutate(p = psych::logistic(Admit_a_3),
+         den = dbinom(admit, applications, prob = p),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 1000)
+
+
+Admit_log_likelihood_matrix_4 <- Admit_draws_4 %>%
+  gather_draws(Admit_a_4[school_id,notNeed]) %>%
+  spread(key = .variable, value = .value) %>%
+  left_join(Admit_draws_4_df) %>%
+  left_join(Admit) %>%
+  filter(.draw %in% Admit_drawSampleIDs) %>%
+  mutate(p = psych::logistic(Admit_a_4 + Admit_bm_4 * male),
+         den = dbinom(admit, applications, prob = p),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 1000)
+
+
+# Calculate WAIC and put them in matrix
+Admit_comp <- rbind(WAIC_greta(Admit_log_likelihood_matrix_1),
+WAIC_greta(Admit_log_likelihood_matrix_2),
+WAIC_greta(Admit_log_likelihood_matrix_3), WAIC_greta(Admit_log_likelihood_matrix_4))
+
+Admit_comp$model <- c("model1", "model2", "model3", "model4")
+
+# Sort WAIC in ascending 
+Admit_sorted_comp <- Admit_comp[order(Admit_comp$WAIC),]
+
+# Calculate weight of each model
+Admit_sorted_comp <- Admit_sorted_comp %>%
+  mutate(w_1 = exp(-0.5 * WAIC),
+         w_2 = round(w_1 / sum(w_1),2)) %>%
+  select(model, WAIC, pWAIC, se, n_obs, w_2, -w_1)
+
+Admit_sorted_comp
+
+```
+
+
+
+## Oceanic Tool Complexity dataset
+```{r}
+data("Kline")
+Kline_df <- Kline
+Kline_df$log_pop <- log(Kline_df$population)
+Kline_df$contact_high <- ifelse(Kline_df$contact == "high", 1, 0)
+
+#data
+Kline_y_i_1 <- Kline_df$total_tools
+Kline_y_i_2 <- Kline_df$total_tools
+Kline_y_i_3 <- Kline_df$total_tools
+Kline_y_i_4 <- Kline_df$total_tools
+Kline_y_i_5 <- Kline_df$total_tools
+
+
+Kline_log_pop_i <- Kline_df$log_pop
+Kline_contact_i <- Kline_df$contact_high
+
+#prior
+Kline_a_1 <- normal(0, 100)
+Kline_bp_1 <- normal(0, 1)
+Kline_bc_1 <- normal(0, 1)
+Kline_bpc_1 <- normal(0, 1)
+
+Kline_a_2 <- normal(0, 100)
+Kline_bp_2 <- normal(0, 1)
+Kline_bc_2 <- normal(0, 1)
+
+Kline_a_3 <- normal(0, 100)
+Kline_bp_3 <- normal(0, 1)
+
+Kline_a_4 <- normal(0, 100)
+Kline_bc_4 <- normal(0, 1)
+
+Kline_a_5 <- normal(0, 100)
+
+#operations
+Kline_log_lambda_1 <- Kline_a_1 + Kline_bp_1 * Kline_log_pop_i + Kline_bc_1 * Kline_contact_i + Kline_bpc_1 * Kline_log_pop_i * Kline_contact_i
+
+Kline_log_lambda_2 <- Kline_a_2 + Kline_bp_2 * Kline_log_pop_i + Kline_bc_2 * Kline_contact_i 
+
+Kline_log_lambda_3 <- Kline_a_3 + Kline_bp_3 * Kline_log_pop_i 
+
+Kline_log_lambda_4 <- Kline_a_4 + Kline_bc_4 * Kline_contact_i 
+
+Kline_log_lambda_5 <- Kline_a_5
+
+Kline_lambda_1 <- exp(Kline_log_lambda_1)
+Kline_lambda_2 <- exp(Kline_log_lambda_2)
+Kline_lambda_3 <- exp(Kline_log_lambda_3)
+Kline_lambda_4 <- exp(Kline_log_lambda_4)
+Kline_lambda_5 <- exp(Kline_log_lambda_5)
+
+#likelihood
+distribution(Kline_y_i_1) <- poisson(Kline_lambda_1)
+distribution(Kline_y_i_2) <- poisson(Kline_lambda_2)
+distribution(Kline_y_i_3) <- poisson(Kline_lambda_3)
+distribution(Kline_y_i_4) <- poisson(Kline_lambda_4)
+distribution(Kline_y_i_5) <- poisson(Kline_lambda_5)
+
+#model
+Kline_model_1 <- model(Kline_a_1, Kline_bp_1, Kline_bc_1, Kline_bpc_1)
+Kline_model_2 <- model(Kline_a_2, Kline_bp_2, Kline_bc_2)
+Kline_model_3 <- model(Kline_a_3, Kline_bp_3)
+Kline_model_4 <- model(Kline_a_4, Kline_bc_4)
+Kline_model_5 <- model(Kline_a_5)
+
+#draws
+Kline_draws_1 <- greta::mcmc(Kline_model_1)
+Kline_draws_2 <- greta::mcmc(Kline_model_2)
+Kline_draws_3 <- greta::mcmc(Kline_model_3)
+Kline_draws_4 <- greta::mcmc(Kline_model_4)
+Kline_draws_5 <- greta::mcmc(Kline_model_5)
+
+summary(Kline_draws_2)
+mcmc_intervals(Kline_draws_1)
+
+#tidy draws
+Kline_draws_1_df <- tidy_draws(Kline_draws_1)
+Kline_draws_2_df <- tidy_draws(Kline_draws_2)
+Kline_draws_3_df <- tidy_draws(Kline_draws_3)
+Kline_draws_4_df <- tidy_draws(Kline_draws_4)
+Kline_draws_5_df <- tidy_draws(Kline_draws_5)
+
+#Create log-likelihood matrix
+head(Kline_draws_1_df)
+
+Kline_drawSampleIDs <- sample(1:nrow(Kline_draws_1_df), size = 1000)
+
+
+Kline_log_likelihood_matrix_1 <- Kline_draws_1_df %>%
+  filter(.draw %in% Kline_drawSampleIDs) %>%
+  mutate(y_i = list(Kline_y_i_1),
+         log_pop_i = list(Kline_log_pop_i),
+         contact_i = list(Kline_contact_i)) %>%
+  unnest() %>%
+  mutate(lambda = exp(Kline_a_1 + Kline_bp_1 * log_pop_i + Kline_bc_1 * contact_i + Kline_bpc_1 * contact_i * log_pop_i),
+         den = dpois(x = y_i, lambda),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 1000)
+
+Kline_log_likelihood_matrix_2 <- Kline_draws_2_df %>%
+  filter(.draw %in% Kline_drawSampleIDs) %>%
+  mutate(y_i = list(Kline_y_i_2),
+         log_pop_i = list(Kline_log_pop_i),
+         contact_i = list(Kline_contact_i)) %>%
+  unnest() %>%
+  mutate(lambda = exp(Kline_a_2 + Kline_bp_2 * log_pop_i + Kline_bc_2 * contact_i),
+         den = dpois(x = y_i, lambda),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 1000)
+
+Kline_log_likelihood_matrix_3 <- Kline_draws_3_df %>%
+  filter(.draw %in% Kline_drawSampleIDs) %>%
+  mutate(y_i = list(Kline_y_i_3),
+         log_pop_i = list(Kline_log_pop_i)) %>%
+  unnest() %>%
+  mutate(lambda = exp(Kline_a_3 + Kline_bp_3 * log_pop_i),
+         den = dpois(x = y_i, lambda),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 1000)
+
+
+Kline_log_likelihood_matrix_4 <- Kline_draws_4_df %>%
+  filter(.draw %in% Kline_drawSampleIDs) %>%
+  mutate(y_i = list(Kline_y_i_4),
+         contact_i = list(Kline_contact_i)) %>%
+  unnest() %>%
+  mutate(lambda = exp(Kline_a_4 +  Kline_bc_4 * contact_i),
+         den = dpois(x = y_i, lambda),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 1000)
+
+
+
+Kline_log_likelihood_matrix_5 <- Kline_draws_5_df %>%
+  filter(.draw %in% Kline_drawSampleIDs) %>%
+  mutate(y_i = list(Kline_y_i_5)) %>%
+  unnest() %>%
+  mutate(lambda = exp(Kline_a_5),
+         den = dpois(x = y_i, lambda),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 1000)
+
+
+# Calculate WAIC and put them in matrix
+Kline_comp <- rbind(WAIC_greta(Kline_log_likelihood_matrix_1),
+WAIC_greta(Kline_log_likelihood_matrix_2),
+WAIC_greta(Kline_log_likelihood_matrix_3), WAIC_greta(Kline_log_likelihood_matrix_4),
+WAIC_greta(Kline_log_likelihood_matrix_5))
+
+Kline_comp$model <- c("model1", "model2", "model3", "model4", "model5" )
+
+# Sort WAIC in ascending 
+Kline_sorted_comp <- Kline_comp[order(Kline_comp$WAIC),]
+
+# Calculate weight of each model
+Kline_sorted_comp <- Kline_sorted_comp %>%
+  mutate(w_1 = exp(-0.5 * WAIC),
+         weight = round(w_1 / sum(w_1),2)) %>%
+  select(model, WAIC, pWAIC, se, n_obs, weight, -w_1)
+
+Kline_sorted_comp
+
+# Posterior Predictive Check using ensemble
+# Average of posterior predictive check
+Kline_averg_post_check <- Kline_draws_2_df %>%
+  left_join(Kline_draws_1_df) %>%
+  left_join(Kline_draws_3_df) %>%
+  sample_n(500) %>%
+  mutate(log_pop = list(c(seq(from = 6, to = 13, length= 30), seq(from = 6, to = 13, length = 30))),
+         contact_i = list(rep(c(0,1), each = 30))) %>%
+  unnest() %>%
+  mutate(k_lambda_1 = exp(Kline_a_1 + Kline_bp_1 * log_pop + Kline_bc_1 * contact_i + Kline_bpc_1 * contact_i * log_pop),
+         k_lambda_2 = exp(Kline_a_2 + Kline_bp_2 * log_pop + Kline_bc_2 * contact_i),
+         k_lambda_3 = exp(Kline_a_3 + Kline_bp_3 * log_pop)) %>%
+  rowwise() %>%
+  mutate(agg_total_tools = 0.56* rpois(1, lambda = k_lambda_2) + 0.4 * rpois(1, lambda = k_lambda_1) + 0.04 * rpois(1, lambda =  k_lambda_3)) %>%
+  group_by(log_pop, contact_i) %>%
+  summarise(total_tools = mean(agg_total_tools),
+            sd_tools = sd(agg_total_tools))
+
+head(Kline_averg_post_check)
+
+# plot the Kline data
+ggplot() +
+  geom_point(data = Kline_df, aes(x = log_pop, y = total_tools, color = factor(contact_high)), size = 3) +
+   geom_line(data = Kline_averg_post_check, aes(x = log_pop, y = total_tools, linetype = factor(contact_i))) +
+  geom_ribbon(data = Kline_averg_post_check[Kline_averg_post_check$contact_i==0,], aes(x = log_pop, ymin = total_tools - 2 * sd_tools, ymax = total_tools + 2 * sd_tools), fill = "tomato", alpha = 0.5) +
+  geom_ribbon(data = Kline_averg_post_check[Kline_averg_post_check$contact_i==1,], aes(x = log_pop, ymin = total_tools - 2 * sd_tools, ymax = total_tools + 2 * sd_tools), fill = "lightskyblue", alpha = 0.5) +
+  scale_linetype_manual(values = c("dashed", "solid"), labels = c("low contact", "high contact")) +
+  scale_color_manual(values = c("tomato", "lightskyblue"), labels = c("low contact", "high contact")) +
+  theme(legend.title  = element_blank())
+
+
+
+
+```
+
+
+## Chapter 12.1: Ordered categorical outcomes: Trolley dataset
+```{r}
+data("Trolley")
+trolley <- Trolley
+trolley$response <- as.factor(trolley$response)
+
+
+##data
+trolley_df <- as_data(cbind(1, Trolley[,c(2,8,9,10)]))
+trolley_response_1 <- model.matrix(~ response -1, trolley)
+trolley_P <- ncol(trolley_df)
+trolley_K <- ncol(trolley_response_1)
+
+##prior
+
+
+##distribution
+
+
+##model
+
+
+##draws
+
+```
+
+
+
+##Chapter 13.1 Multilevel tadpoles: Reedfrogs dataset with aggregated binomial
+```{r}
+data("reedfrogs")
+frogs <- reedfrogs
+frogs$tank <- 1:nrow(frogs)
+frogs
+
+#data
+frogs_y_i_1 <- frogs$surv
+frogs_n_i_1 <- frogs$density
+
+frogs_y_i_2 <- frogs$surv
+frogs_n_i_2 <- frogs$density
+
+frogs_tank_id <- frogs$tank
+frogs_num_tank <- length(unique(frogs$tank))
+
+#prior
+frogs_a_tank_1 <- normal(0, 5, dim = frogs_num_tank)
+
+frogs_a_2 <- normal(0,1)
+frogs_sigma_2 <- cauchy(0, 1, truncation = c(0, Inf))
+frogs_a_tank_2 <- normal(frogs_a_2, frogs_sigma_2, dim = frogs_num_tank)
+
+#operations
+frogs_p_i_1 <- psych::logistic(frogs_a_tank_1)
+frogs_p_i_2 <- psych::logistic(frogs_a_tank_2)
+
+
+#likelihood
+distribution(frogs_y_i_1) <- binomial(frogs_n_i_1, frogs_p_i_1)
+distribution(frogs_y_i_2) <- binomial(frogs_n_i_2, frogs_p_i_2)
+
+#model
+frogs_model_1 <- model(frogs_a_tank_1)
+frogs_model_2 <- model(frogs_a_tank_2, frogs_a_2, frogs_sigma_2)
+
+#draws
+frogs_draws_1 <- greta::mcmc(frogs_model_1)
+frogs_draws_2 <- greta::mcmc(frogs_model_2)
+
+#tidy draws
+frogs_draws_1_df <- tidy_draws(frogs_draws_1)
+frogs_draws_2_df <- tidy_draws(frogs_draws_2)
+
+#create long-formated dataset
+frogs$die = frogs$density - frogs$surv
+head(long_frogs)
+str(long_frogs)
+
+long_frogs <- frogs %>%
+  rowwise() %>%
+  mutate(survive = list(c(rep(1, length = surv), rep(0, length = die)))) %>%
+  unnest() %>%
+  select(tank, survive)
+
+#Create log-likelihood matrix
+frogs_drawSampleIDs <- sample(1:nrow(frogs_draws_1_df), size = 500)
+
+
+frogs_log_likelihood_matrix_1 <- frogs_draws_1 %>%
+  gather_draws(frogs_a_tank_1[tank, notNeeded]) %>%
+  spread(key = .variable, value = .value) %>%
+  filter(.draw %in% frogs_drawSampleIDs) %>%
+  left_join(long_frogs) %>%
+  mutate(p = psych::logistic(frogs_a_tank_1,),
+         den = dbinom(x = survive, size = 1, prob = p),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 500)
+
+frogs_log_likelihood_matrix_2 <- frogs_draws_2 %>%
+  gather_draws(frogs_a_tank_2[tank, notNeeded]) %>%
+  spread(key = .variable, value = .value) %>%
+  filter(.draw %in% frogs_drawSampleIDs) %>%
+  left_join(long_frogs) %>%
+  mutate(p = psych::logistic(frogs_a_tank_2),
+         den = dbinom(x = survive, size = 1, prob = p),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 500)
+
+
+# Calculate WAIC and put them in matrix
+frogs_comp <- rbind(WAIC_greta(frogs_log_likelihood_matrix_1),
+WAIC_greta(frogs_log_likelihood_matrix_2))
+
+frogs_comp$model <- c("model1", "model2" )
+
+# Sort WAIC in ascending 
+frogs_sorted_comp <- frogs_comp[order(frogs_comp$WAIC),]
+
+# Calculate weight of each model
+frogs_sorted_comp <- frogs_sorted_comp %>%
+  mutate(w_1 = exp(-0.5 * WAIC),
+         weight = round(w_1 / sum(w_1),2)) %>%
+  select(model, WAIC, pWAIC, se, n_obs, weight, -w_1)
+
+frogs_sorted_comp
+```
+
+
+## Chapter 13.3 Multilevel Chimpanzee with model 1: varying actor and model 2: varying actor and varying block
+
+```{r}
+data("chimpanzees")
+chimp <- chimpanzees
+chimp$recipient <- NULL
+
+  
+  #data
+multi_chimp_y_i_1 <- chimp$pulled_left
+multi_chimp_y_i_2 <- chimp$pulled_left
+
+multi_chimp_actor_id <- chimp$actor
+multi_chimp_block_id <- chimp$block
+multi_chimp_prosoc_i <- chimp$prosoc_left
+multi_chimp_condition_i <- chimp$condition
+
+multi_chimp_num_actor <- length(unique(chimp$actor))
+multi_chimp_num_block <- length(unique(chimp$block))
+
+##prior
+multi_chimp_bp_1 <- normal(0,10)
+multi_chimp_bpc_1 <- normal(0,10)
+multi_chimp_sigma_actor_i_1 <- cauchy(0, 1, truncation = c(0, Inf))
+multi_chimp_a_actor_1 <- normal(0, multi_chimp_sigma_actor_i_1, dim = multi_chimp_num_actor)
+multi_chimp_a_1 <- normal(0,10)
+
+multi_chimp_bp_2 <- normal(0,10)
+multi_chimp_bpc_2 <- normal(0,10)
+multi_chimp_sigma_actor_i_2 <- cauchy(0, 1, truncation = c(0, Inf))
+multi_chimp_a_actor_2 <- normal(0, multi_chimp_sigma_actor_i_2, dim = multi_chimp_num_actor)
+multi_chimp_sigma_block_i_2 <- cauchy(0, 1, truncation = c(0, Inf))
+multi_chimp_a_block_2 <- normal(0, multi_chimp_sigma_block_i_2, dim = multi_chimp_num_block)
+multi_chimp_a_2 <- normal(0,10)
+
+#operations
+multi_chimp_p_i_1 <- psych::logistic(multi_chimp_a_1 + multi_chimp_a_actor_1[multi_chimp_actor_id] + multi_chimp_bp_1 * multi_chimp_prosoc_i + multi_chimp_bpc_1 * multi_chimp_prosoc_i * multi_chimp_condition_i)
+
+multi_chimp_p_i_2 <- psych::logistic(multi_chimp_a_2 + multi_chimp_a_actor_2[multi_chimp_actor_id] + multi_chimp_a_block_2[multi_chimp_block_id] + multi_chimp_bp_2 * multi_chimp_prosoc_i + multi_chimp_bpc_2 * multi_chimp_prosoc_i * multi_chimp_condition_i)
+
+#likelihood
+distribution(multi_chimp_y_i_1) <- binomial(1, multi_chimp_p_i_1)
+
+distribution(multi_chimp_y_i_2) <- binomial(1, multi_chimp_p_i_2)
+
+#model
+multi_chimp_model_1 <- model(multi_chimp_a_1, multi_chimp_a_actor_1, multi_chimp_sigma_actor_i_1, multi_chimp_bp_1, multi_chimp_bpc_1)
+
+multi_chimp_model_2 <- model(multi_chimp_a_2, multi_chimp_a_actor_2, multi_chimp_sigma_actor_i_2, multi_chimp_a_block_2, multi_chimp_sigma_block_i_2, multi_chimp_bp_2, multi_chimp_bpc_2)
+
+#draws
+multi_chimp_draws_1 <- greta::mcmc(multi_chimp_model_1)
+multi_chimp_draws_2 <- greta::mcmc(multi_chimp_model_2)
+
+#tidy draws
+multi_chimp_draws_1_df <- tidy_draws(multi_chimp_draws_1)
+multi_chimp_draws_2_df <- tidy_draws(multi_chimp_draws_2)
+
+summary(multi_chimp_draws_2)
+mcmc_intervals(multi_chimp_draws_2)
+
+#Create log-likelihood matrix for model 1
+multi_chimp_drawSampleIDs <- sample(1:nrow(multi_chimp_draws_1_df), size = 500)
+
+multi_chimp_log_likelihood_matrix_1 <- multi_chimp_draws_1 %>%
+  gather_draws(multi_chimp_a_actor_1[actor, notNeeded]) %>%
+  spread(key = .variable, value = .value) %>% left_join(multi_chimp_draws_1_df) %>% 
+  left_join(chimp) %>%
+  filter(.draw %in% multi_chimp_drawSampleIDs) %>%
+  mutate(p = psych::logistic(multi_chimp_a_1 + multi_chimp_a_actor_1 + multi_chimp_bp_1 * prosoc_left + multi_chimp_bpc_1 * prosoc_left * condition),
+         den = dbinom(x = pulled_left, size = 1, prob = p),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 500)
+
+#create log likelihood matrix for model 2
+#gather block
+multi_chimp_gather_block <- multi_chimp_draws_2 %>%
+  gather_draws( multi_chimp_a_block_2[block, notNeeded2]) %>%
+  spread(key = .variable, value = .value)
+
+#gather actor and combine with block
+multi_chimp_log_likelihood_matrix_2 <- multi_chimp_draws_2 %>%
+  gather_draws(multi_chimp_a_actor_2[actor, notNeeded]) %>%
+  spread(key = .variable, value = .value) %>%
+  left_join(multi_chimp_gather_block) %>%
+  left_join(multi_chimp_draws_2_df) %>% 
+  left_join(chimp) %>%
+  filter(.draw %in% multi_chimp_drawSampleIDs) %>%
+  mutate(p = psych::logistic(multi_chimp_a_2 + multi_chimp_a_actor_2 + multi_chimp_a_block_2 + multi_chimp_bp_2 * prosoc_left + multi_chimp_bpc_2 * prosoc_left * condition),
+         den = dbinom(x = pulled_left, size = 1, prob = p),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 500)
+
+
+# Calculate WAIC and put them in matrix
+multi_chimp_comp <- rbind(WAIC_greta(multi_chimp_log_likelihood_matrix_1),
+WAIC_greta(multi_chimp_log_likelihood_matrix_2))
+
+multi_chimp_comp$model <- c("model1", "model2" )
+
+# Sort WAIC in ascending 
+multi_chimp_sorted_comp <- multi_chimp_comp[order(multi_chimp_comp$WAIC),]
+
+# Calculate weight of each model
+multi_chimp_sorted_comp <- multi_chimp_sorted_comp %>%
+  mutate(w_1 = exp(-0.5 * WAIC),
+         weight = round(w_1 / sum(w_1),2)) %>%
+  select(model, WAIC, pWAIC, se, n_obs, weight, -w_1)
+
+multi_chimp_sorted_comp
+```
+
+
+## Chapter 14.2: Admission dataset with multivariate distribution with aggregated binomial
+
+```{r}
+Admit_cov <- UCBadmit
+Admit_cov$male <- ifelse(UCBadmit$applicant.gender == "male", 1, 0)
+Admit_cov$dept_id <- rep(c(1:6), each = 2)
+
+head(Admit_cov)
+str(Admit_cov)
+
+##data
+Admit_cov_y_i_1 <- Admit_cov$admit
+Admit_cov_y_i_2 <- Admit_cov$admit
+Admit_cov_y_i_3 <- Admit_cov$admit
+
+Admit_cov_appli_i <- Admit_cov$applications
+Admit_cov_num_dept <- length(unique(Admit_cov$dept))
+Admit_cov_dept_id <- Admit_cov$dept_id
+Admit_cov_male_i <- Admit_cov$male
+
+##prior
+#Model1
+Admit_cov_bm_1 <- normal(0, 10)
+Admit_cov_a_1 <- normal(0, 10)
+Admit_cov_sigma_dept_1 <- cauchy(0, 2, truncation = c(0, Inf))
+Admit_cov_a_dept_i_1 <- normal(Admit_cov_a_1, Admit_cov_sigma_dept_1, dim = Admit_cov_num_dept)
+
+#model2
+Admit_cov_a_2 <- normal(0, 10)
+Admit_cov_sigma_dept_2 <- cauchy(0, 2, truncation = c(0, Inf))
+Admit_cov_a_dept_i_2 <- normal(Admit_cov_a_2, Admit_cov_sigma_dept_2, dim = Admit_cov_num_dept)
+
+#model3
+Admit_cov_a_3 <- normal(0, 10)
+Admit_cov_b_3 <- normal(0, 1)
+Admit_cov_mean_vector <- c(Admit_cov_a_3, Admit_cov_b_3)
+
+Admit_cov_sigma_a_3 <- cauchy(0, 2, truncation = c(0, Inf))
+Admit_cov_sigma_b_3 <- cauchy(0, 2, truncation = c(0, Inf))
+
+Admit_cov_diag_matrix <- zeros(c(2,2))
+diag(Admit_cov_diag_matrix) <- c(Admit_cov_sigma_a_3, Admit_cov_sigma_b_3)
+
+Admit_cov_R <- lkj_correlation(2)
+
+Admit_cov_sigma_vector <- Admit_cov_diag_matrix %*% Admit_cov_R %*% Admit_cov_diag_matrix
+
+Admit_cov_intercept_slope <- multivariate_normal(mean = t(Admit_cov_mean_vector), Sigma = Admit_cov_sigma_vector, n_realisations = Admit_cov_num_dept)
+
+#operations
+Admit_cov_p_i_1 <- psych::logistic(Admit_cov_a_dept_i_1[Admit_cov_dept_id] + Admit_cov_bm_1 * Admit_cov_male_i)
+
+Admit_cov_p_i_2 <- psych::logistic(Admit_cov_a_dept_i_2[Admit_cov_dept_id])
+
+Admit_cov_p_i_3 <- psych::logistic(Admit_cov_intercept_slope[,1][Admit_cov_dept_id] + Admit_cov_intercept_slope[,2][Admit_cov_dept_id] * Admit_cov_male_i)
+
+#likelihood
+distribution(Admit_cov_y_i_1) <- binomial(Admit_cov_appli_i, Admit_cov_p_i_1)
+
+distribution(Admit_cov_y_i_2) <- binomial(Admit_cov_appli_i, Admit_cov_p_i_2)
+
+distribution(Admit_cov_y_i_3) <- binomial(Admit_cov_appli_i, Admit_cov_p_i_3)
+
+
+#model
+Admit_cov_model_1 <- model(Admit_cov_a_dept_i_1, Admit_cov_a_1, Admit_cov_sigma_dept_1, Admit_cov_bm_1)
+
+Admit_cov_model_2 <- model(Admit_cov_a_dept_i_2, Admit_cov_a_2, Admit_cov_sigma_dept_2)
+
+Admit_cov_model_3 <- model(Admit_cov_a_3, Admit_cov_b_3, Admit_cov_sigma_a_3, Admit_cov_sigma_b_3, Admit_cov_R, Admit_cov_intercept_slope)
+
+#draws
+Admit_cov_draws_1 <- greta::mcmc(Admit_cov_model_1)
+Admit_cov_draws_2 <- greta::mcmc(Admit_cov_model_2)
+Admit_cov_draws_3 <- greta::mcmc(Admit_cov_model_3)
+
+
+#tidy draws
+Admit_cov_draws_1_df <- tidy_draws(Admit_cov_draws_1)
+Admit_cov_draws_2_df <- tidy_draws(Admit_cov_draws_2)
+Admit_cov_draws_3_df <- tidy_draws(Admit_cov_draws_3)
+
+#create long-formated dataset
+long_Admit <- Admit_cov %>%
+  rowwise() %>%
+  mutate(admited = list(c(rep(1, length = admit), rep(0, length = reject)))) %>%
+  unnest() %>%
+  select(dept_id, male, admited)
+
+#Create log-likelihood matrix for model 1
+Admit_cov_drawSampleIDs <- sample(1:nrow(Admit_cov_draws_1_df), size = 500)
+
+Admit_cov_log_likelihood_matrix_1 <- Admit_cov_draws_1 %>%
+  gather_draws(Admit_cov_a_dept_i_1[dept_id, notNeeded]) %>%
+  spread(key = .variable, value = .value) %>% left_join(Admit_cov_draws_1_df) %>% 
+  left_join(long_Admit) %>%
+  filter(.draw %in% Admit_cov_drawSampleIDs) %>%
+  mutate(p = psych::logistic(Admit_cov_a_dept_i_1 + Admit_cov_bm_1 * male),
+         den = dbinom(x = admited, size = 1, prob = p),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 500)
+
+
+#create log likelihood matrix for model 2
+Admit_cov_log_likelihood_matrix_2 <- Admit_cov_draws_2 %>%
+  gather_draws(Admit_cov_a_dept_i_2[dept_id, notNeeded]) %>%
+  spread(key = .variable, value = .value) %>%
+  left_join(long_Admit) %>%
+  filter(.draw %in% Admit_cov_drawSampleIDs) %>%
+  mutate(p = psych::logistic(Admit_cov_a_dept_i_2),
+         den = dbinom(x = admited, size = 1, prob = p),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 500)
+
+#create log likelihood matrix for model 3
+Admit_cov_log_likelihood_matrix_3 <- Admit_cov_draws_3 %>%
+  gather_draws(Admit_cov_intercept_slope[dept_id, intercept]) %>%
+  spread(key = intercept, value = .value) %>%
+  rename(intercept = "1", slope = "2") %>%
+  left_join(long_Admit) %>%
+  filter(.draw %in% Admit_cov_drawSampleIDs) %>%
+  mutate(p = psych::logistic(intercept + slope * male),
+         den = dbinom(x = admited, size = 1, prob = p),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 500)
+
+# Calculate WAIC and put them in matrix
+Admit_cov_comp <- rbind(WAIC_greta(Admit_cov_log_likelihood_matrix_1),
+WAIC_greta(Admit_cov_log_likelihood_matrix_2), WAIC_greta(Admit_cov_log_likelihood_matrix_3))
+
+Admit_cov_comp$model <- c("model1", "model2", "model3")
+
+# Sort WAIC in ascending 
+Admit_cov_sorted_comp <- Admit_cov_comp[order(Admit_cov_comp$WAIC),]
+
+# Calculate weight of each model
+Admit_cov_sorted_comp <- Admit_cov_sorted_comp %>%
+  mutate(w_1 = exp(-0.5 * WAIC),
+         weight = round(w_1 / sum(w_1),2)) %>%
+  select(model, WAIC, pWAIC, se, n_obs, weight, -w_1)
+
+Admit_cov_sorted_comp
+
+```
+
+
+## Chapter 14.3: Cross-classified chimpanzees with varying slopes (not finish - not the same result)
+
+```{r}
+data("chimpanzees")
+chimp_cov <- chimpanzees
+chimp_cov$recipient <- NULL
+
+#data
+chimp_cov_y_i <- chimp_cov$pulled_left
+
+
+chimp_cov_actor_id <- chimp_cov$actor
+chimp_cov_block_id <- chimp_cov$block
+chimp_cov_prosoc_i <- chimp_cov$prosoc_left
+chimp_cov_condition_i <- chimp_cov$condition
+
+chimp_cov_num_actor <- length(unique(chimp_cov$actor))
+chimp_cov_num_block <- length(unique(chimp_cov$block))
+
+##prior
+#model
+chimp_cov_a <- normal(0, 1)
+chimp_cov_bp <- normal(0, 1)
+chimp_cov_bpc <- normal(0, 1)
+chimp_cov_mean_vector <- zeros(3)
+
+# prior for actor
+chimp_cov_sigma_a_actor <- cauchy(0, 2, truncation = c(0, Inf))
+chimp_cov_sigma_bp_actor <- cauchy(0, 2, truncation = c(0, Inf))
+chimp_cov_sigma_bpc_actor <- cauchy(0, 2, truncation = c(0, Inf))
+
+chimp_cov_actor_diag_matrix <- zeros(c(3,3))
+diag(chimp_cov_actor_diag_matrix) <- c(chimp_cov_sigma_a_actor, chimp_cov_sigma_bp_actor, chimp_cov_sigma_bpc_actor)
+
+chimp_cov_actor_R <- lkj_correlation(4,dimension = 3)
+
+chimp_cov_actor_sigma_vector <- chimp_cov_actor_diag_matrix %*% chimp_cov_actor_R %*% chimp_cov_actor_diag_matrix
+
+#chimp_cov_actor_L <- chol(chimp_cov_actor_sigma_vector)
+
+#chimp_cov_actor_intercept_slope_alpha <- multivariate_normal(mean = t(chimp_cov_mean_vector), Sigma = diag(3), n_realisations = chimp_cov_num_actor)
+
+#chimp_cov_actor_intercept_slope <- chimp_cov_actor_intercept_slope_alpha  %*% chimp_cov_actor_L
+
+chimp_cov_actor_intercept_slope <- multivariate_normal(mean = t(chimp_cov_mean_vector), Sigma = chimp_cov_actor_sigma_vector, n_realisations = chimp_cov_num_actor)
+
+#prior for block
+chimp_cov_sigma_a_block <- cauchy(0, 2, truncation = c(0, Inf))
+chimp_cov_sigma_bp_block <- cauchy(0, 2, truncation = c(0, Inf))
+chimp_cov_sigma_bpc_block <- cauchy(0, 2, truncation = c(0, Inf))
+
+chimp_cov_block_diag_matrix <- zeros(c(3,3))
+diag(chimp_cov_block_diag_matrix) <- c(chimp_cov_sigma_a_block, chimp_cov_sigma_bp_block, chimp_cov_sigma_bpc_block)
+
+chimp_cov_block_R <- lkj_correlation(4,dimension = 3)
+
+chimp_cov_block_sigma_vector <- chimp_cov_block_diag_matrix %*% chimp_cov_block_R %*% chimp_cov_block_diag_matrix
+
+#chimp_cov_block_L <- chol(chimp_cov_block_sigma_vector)
+
+#chimp_cov_block_intercept_slope_alpha <- multivariate_normal(mean = t(chimp_cov_mean_vector), Sigma = diag(3), n_realisations = chimp_cov_num_block)
+
+#chimp_cov_block_intercept_slope <- chimp_cov_block_intercept_slope_alpha  %*% chimp_cov_block_L 
+
+chimp_cov_block_intercept_slope <- multivariate_normal(mean = t(chimp_cov_mean_vector), Sigma = chimp_cov_block_sigma_vector, n_realisations = chimp_cov_num_block)
+
+##operations
+chimp_cov_a_i <- chimp_cov_a + chimp_cov_actor_intercept_slope[,1][chimp_cov_actor_id] * chimp_cov_sigma_a_actor + chimp_cov_block_intercept_slope[,1][chimp_cov_block_id] * chimp_cov_sigma_a_block
+
+chimp_cov_bp_i <- chimp_cov_bp + chimp_cov_actor_intercept_slope[,2][chimp_cov_actor_id] * chimp_cov_sigma_bp_actor + chimp_cov_block_intercept_slope[,2][chimp_cov_block_id] * chimp_cov_sigma_bp_block
+
+chimp_cov_bpc_i <- chimp_cov_bpc + chimp_cov_actor_intercept_slope[,3][chimp_cov_actor_id] * chimp_cov_sigma_bpc_actor + chimp_cov_block_intercept_slope[,3][chimp_cov_block_id] * chimp_cov_sigma_bpc_block
+
+chimp_cov_p_i <- psych::logistic(chimp_cov_a_i + chimp_cov_bp_i * chimp_cov_prosoc_i + chimp_cov_bpc_i * chimp_cov_prosoc_i * chimp_cov_condition_i)
+
+##likelihood
+distribution(chimp_cov_y_i) <- binomial(1, chimp_cov_p_i)
+
+#model
+chimp_cov_model <- model(chimp_cov_a, chimp_cov_bp, chimp_cov_bpc, chimp_cov_sigma_a_actor, chimp_cov_sigma_a_block, chimp_cov_sigma_bp_actor, chimp_cov_sigma_bp_block, chimp_cov_sigma_bpc_actor, chimp_cov_sigma_bpc_block, chimp_cov_actor_intercept_slope, chimp_cov_block_intercept_slope)
+
+#draws
+chimp_cov_draws <- greta::mcmc(chimp_cov_model, one_by_one = TRUE)
+
+summary(chimp_cov_draws)
+
+#tidy draws
+chimp_cov_draws_df <- tidy_draws(chimp_cov_draws)
+
+#create long-formated dataset
+
+
+#Create log-likelihood matrix for model 1
+chimp_cov_drawSampleIDs <- sample(1:nrow(chimp_cov_draws_df), size = 500)
+
+#create log likelihood matrix for model 3
+Admit_cov_log_likelihood_matrix_3 <- Admit_cov_draws_3 %>%
+  gather_draws(Admit_cov_intercept_slope[dept_id, intercept]) %>%
+  spread(key = intercept, value = .value) %>%
+  rename(intercept = "1", slope = "2") %>%
+  left_join(long_Admit) %>%
+  filter(.draw %in% Admit_cov_drawSampleIDs) %>%
+  mutate(p = psych::logistic(intercept + slope * male),
+         den = dbinom(x = admited, size = 1, prob = p),
+         log_likelihood = log(den)) %>%
+  .$log_likelihood %>%
+  matrix(ncol = 500)
+
+# Calculate WAIC and put them in matrix
+Admit_cov_comp <- rbind(WAIC_greta(), WAIC_greta(Admit_cov_log_likelihood_matrix_3))
+
+Admit_cov_comp$model <- c("model1", "model2")
+
+# Sort WAIC in ascending 
+Admit_cov_sorted_comp <- Admit_cov_comp[order(Admit_cov_comp$WAIC),]
+
+# Calculate weight of each model
+Admit_cov_sorted_comp <- Admit_cov_sorted_comp %>%
+  mutate(w_1 = exp(-0.5 * WAIC),
+         weight = round(w_1 / sum(w_1),2)) %>%
+  select(model, WAIC, pWAIC, se, n_obs, weight, -w_1)
+
+Admit_cov_sorted_comp
+```
+
+
+
+
+
+## Chapter 15.2: Milk dataset missing data
+```{r}
+data("milk")
+milk_miss <- milk
+milk_miss$neocortex.prop <- milk_miss$neocortex.perc / 100
+milk_miss$logmass <- log(milk_miss$mass)
+
+## data
+#model 1
+milk_miss_y_i_1 <- milk_miss$kcal.per.g
+milk_miss_log_mass_i <- milk_miss$logmass
+milk_miss_neo_i_1 <- milk_miss$neocortex.prop
+
+neo_missing_id <- which(is.na(milk_miss_neo_i_1)) #get the position of missing data
+neo_complete_id <- which(!is.na(milk_miss_neo_i_1))  # get the position of non-missing data
+
+milk_miss_neo_i_1 <- as_data(milk_miss_neo_i_1[neo_complete_id]) # keep non-missing neo data and change into greta array
+
+#model 2
+milk_miss_y_i_2 <- milk_miss$kcal.per.g
+milk_miss_neo_i_2 <- milk_miss$neocortex.prop
+milk_miss_neo_i_2 <- as_data(milk_miss_neo_i_2[neo_complete_id])
+
+## prior
+#model 1
+milk_miss_a_1 <- normal(0, 10)
+milk_miss_sigma_1 <- cauchy(0, 1, truncation = c(0, Inf))
+milk_miss_bn_1 <- normal(0, 10)
+milk_miss_bm_1 <- normal(0, 10)
+
+milk_miss_nu_1 <- normal(0.5 ,1)
+milk_miss_sigma_n_1 <- cauchy(0, 1, truncation = c(0, Inf))
+
+milk_missing_neo_missing <- normal(milk_miss_nu_1, milk_miss_sigma_n_1, dim = length(neo_missing_id)) # prior for missing neo data
+distribution(milk_miss_neo_i_1) <- normal(milk_miss_nu_1, milk_miss_sigma_n_1) # distribution for non-missing neo data
+
+# combine with non-missing data
+milk_neo_i_1_combine <- ones(length(milk_miss$neocortex.prop))
+
+milk_neo_i_1_combine[neo_complete_id] <- milk_miss_neo_i_1
+
+milk_neo_i_1_combine[neo_missing_id] <- milk_missing_neo_missing
+
+#model 2
+milk_miss_a_2 <- normal(0, 10)
+milk_miss_sigma_2 <- cauchy(0, 1, truncation = c(0, Inf))
+milk_miss_bn_2 <- normal(0, 10)
+milk_miss_bm_2 <- normal(0, 10)
+
+milk_miss_a_nu_2 <- normal(0.5 ,1)
+milk_miss_gm_2 <- normal(0, 10)
+milk_miss_sigma_n_2 <- cauchy(0, 1, truncation = c(0, Inf))
+
+milk_miss_nu_i_2 <- milk_miss_a_nu_2 + milk_miss_gm_2 * milk_miss_log_mass_i
+
+milk_missing_neo_missing_2 <- normal(milk_miss_nu_i_2[neo_missing_id], milk_miss_sigma_n_2, dim = length(neo_missing_id)) # prior for missing neo data
+
+distribution(milk_miss_neo_i_2) <- normal(milk_miss_nu_i_2[neo_complete_id], milk_miss_sigma_n_2) # distribution for non-missing data
+
+# combine with non-missing data
+milk_neo_i_2_combine <- ones(length(milk_miss$neocortex.prop))
+
+milk_neo_i_2_combine[neo_complete_id] <- milk_miss_neo_i_2
+
+milk_neo_i_2_combine[neo_missing_id] <- milk_missing_neo_missing_2
+
+##operation
+milk_miss_mu_1 <- milk_miss_a_1 + milk_miss_bn_1 * milk_neo_i_1_combine + milk_miss_bm_1 * milk_miss_log_mass_i
+
+milk_miss_mu_2 <- milk_miss_a_2 + milk_miss_bn_2 * milk_neo_i_2_combine + milk_miss_bm_2 * milk_miss_log_mass_i
+
+## likelihood
+distribution(milk_miss_y_i_1) <- normal(milk_miss_mu_1, milk_miss_sigma_1)
+
+distribution(milk_miss_y_i_2) <- normal(milk_miss_mu_2, milk_miss_sigma_2)
+
+##model
+milk_miss_model_1 <- model(milk_missing_neo_missing, milk_miss_a_1, milk_miss_bm_1, milk_miss_bn_1, milk_miss_sigma_1, milk_miss_sigma_n_1, milk_miss_nu_1)
+
+milk_miss_model_2 <- model(milk_missing_neo_missing_2, milk_miss_a_2, milk_miss_bm_2, milk_miss_bn_2, milk_miss_sigma_2, milk_miss_sigma_n_2, milk_miss_a_nu_2, milk_miss_gm_2)
+
+## draws
+milk_miss_draws_1 <- greta::mcmc(milk_miss_model_1)
+milk_miss_draws_2 <- greta::mcmc(milk_miss_model_2)
+
+summary(milk_miss_draws_1)
+summary(milk_miss_draws_2)
+
+## tidy draws
+milk_miss_draws_1_df <- tidy_draws(milk_miss_draws_1)
+ 
+
+```
+
