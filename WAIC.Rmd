@@ -1617,7 +1617,10 @@ summary(milk_miss_draws_2)
 
 ## tidy draws
 milk_miss_draws_1_df <- tidy_draws(milk_miss_draws_1)
- 
+```
+
+## New
+```{r}
 
 ```
 
