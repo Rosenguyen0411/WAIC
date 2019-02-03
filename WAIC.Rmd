@@ -1094,7 +1094,7 @@ summary(trolley_draws_1)
 
 ## Chapter 12.2 Zero-inflated outcomes
 ```{r}
-#data
+#simulated data
 # define parameters
 prob_drink <- 0.2 # 20% of days
 rate_work <- 1    # average 1 manuscript per day
@@ -1112,13 +1112,12 @@ mix_df <- mix_df %>%
 
 mix_y_factor <- model.matrix(~ y_factor - 1, mix_df)
 
-mix_df_zeros <- mix_y_factor[,1]
-mix_df_ones <- mix_y_factor[,2]
-mix_df_twos <- mix_y_factor[,3]
-mix_df_threes <- mix_y_factor[,4]
-mix_df_fours <- mix_y_factor[,5]
-mix_df_sixs <- mix_y_factor[,6]
-
+mix_zeros <- rep(0, 365)
+mix_ones <- rep(1, 365)
+mix_twos <- rep(2, 365)
+mix_threes <- rep(3, 365)
+mix_fours <- rep(4, 365)
+mix_sixs <- rep(6, 365)
 
 ## prior
 log_rate <- normal(0, 10)
@@ -1127,32 +1126,31 @@ logit_drink <- normal(0, 1)
 mix_rate <- exp(log_rate)
 mix_prob_drink <- psych::logistic(logit_drink)
 
-#mix_drink <- binomial(length_zeros, mix_prob_drink)
 
 ## operation
-#mix_p_zero <- mix_drink * 1 + (1 - mix_drink) * exp(- mix_rate)
-mix_p_zero <- mix_prob_drink * 1 + (1 - mix_prob_drink) * exp(- mix_rate)
+mix_p_zero <- mix_prob_drink  + (1 - mix_prob_drink)* mix_rate^mix_zeros * exp(- mix_rate)
 
-mix_p_one <- (1 - mix_prob_drink) * mix_rate * exp(- mix_rate)
+mix_p_one <- (1 - mix_prob_drink) * mix_rate^mix_ones * exp(- mix_rate)
 
-mix_p_two <- (1 - mix_prob_drink) * mix_rate^2 * exp(- mix_rate) / factorial(2)
+mix_p_two <- (1 - mix_prob_drink) * mix_rate^mix_twos * exp(- mix_rate) / factorial(mix_twos)
 
-mix_p_three <- (1 - mix_prob_drink) * mix_rate^3 * exp(- mix_rate) / factorial(3)
+mix_p_three <- (1 - mix_prob_drink) * mix_rate^mix_threes * exp(- mix_rate) / factorial(mix_threes)
 
-mix_p_four <- (1 - mix_prob_drink) * mix_rate^4 * exp(- mix_rate) / factorial(4)
+mix_p_four <- (1 - mix_prob_drink) * mix_rate^mix_fours * exp(- mix_rate) / factorial(mix_fours)
 
-mix_p_six<- (1 - mix_prob_drink) * mix_rate^6 * exp(- mix_rate) / factorial(6)
+mix_p_six<- (1 - mix_prob_drink) * mix_rate^mix_sixs * exp(- mix_rate) / factorial(mix_sixs)
 
-distribution(mix_df_zeros) <- bernoulli(mix_p_zero)
-distribution(mix_df_ones) <- bernoulli(mix_p_one)
-distribution(mix_df_twos) <- bernoulli(mix_p_two)
-distribution(mix_df_threes) <- bernoulli(mix_p_three)
-distribution(mix_df_fours) <- bernoulli(mix_p_four)
-distribution(mix_df_sixs) <- bernoulli(mix_p_six)
+#combine into a matrix
+mix_prob <- cbind(mix_p_zero, mix_p_one, mix_p_two, mix_p_three, mix_p_four, mix_p_six)
 
+## distribution
+distribution(mix_y_factor) <- categorical(mix_prob)
+
+##model
 mix_model <- model(log_rate, logit_drink)
 
-mix_draws <- greta::mcmc(mix_model, n_samples = 1000)
+##draws
+mix_draws <- greta::mcmc(mix_model, n_samples = 3000)
 
 summary(mix_draws)
 ```
@@ -1749,6 +1747,8 @@ summary(milk_miss_draws_2)
 ## tidy draws
 milk_miss_draws_1_df <- tidy_draws(milk_miss_draws_1)
 ```
+
+
 
 
 
