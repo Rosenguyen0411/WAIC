@@ -1008,28 +1008,154 @@ ggplot() +
 ```{r}
 data("Trolley")
 trolley <- Trolley
-trolley$response <- as.factor(trolley$response)
+
+trolley <- trolley %>%
+  select(response, action, intention, contact) %>%
+  mutate(response_factor = as.factor(response))
+head(trolley)
 
 
 ##data
-trolley_df <- as_data(cbind(1, Trolley[,c(2,8,9,10)]))
-trolley_response_1 <- model.matrix(~ response -1, trolley)
-trolley_P <- ncol(trolley_df)
-trolley_K <- ncol(trolley_response_1)
+trolley_response_1 <- model.matrix(~ response_factor -1, trolley)
+trolley_response_ones <- trolley_response_1[,1]
+trolley_response_twos <- trolley_response_1[,2]
+trolley_response_threes <- trolley_response_1[,3]
+trolley_response_fours <- trolley_response_1[,4]
+trolley_response_fives <- trolley_response_1[,5]
+trolley_response_sixs <- trolley_response_1[,6]
+trolley_response_sevens <- trolley_response_1[,7]
+
+trolley_action <- trolley$action
+trolley_intention <- trolley$intention
+trolley_contact <- trolley$contact
 
 ##prior
+trolley_bA <- normal(0, 10)
+trolley_bI <- normal(0, 10)
+trolley_bC <- normal(0, 10)
 
+trolley_c1 <- normal(0, 10)
+trolley_c2 <- normal(0, 10)
+trolley_c3 <- normal(0, 10)
+trolley_c4 <- normal(0, 10)
+trolley_c5 <- normal(0, 10)
+trolley_c6 <- normal(0, 10)
+
+theta_i <- trolley_bA * trolley_action + trolley_bI * trolley_intention + trolley_bC * trolley_contact
+
+## Operation
+trolley_logit_p1 <- trolley_c1 - theta_i
+
+trolley_logit_p2 <- trolley_c2 - theta_i
+
+trolley_logit_p3 <- trolley_c3 - theta_i
+
+trolley_logit_p4 <- trolley_c4 - theta_i
+
+trolley_logit_p5 <- trolley_c5 - theta_i
+
+trolley_logit_p6 <- trolley_c6 - theta_i
+
+trolley_p1 <- psych::logistic(trolley_logit_p1)
+
+trolley_p2 <- psych::logistic(trolley_logit_p2) - psych::logistic(trolley_logit_p1)
+
+trolley_p3 <- psych::logistic(trolley_logit_p3) - psych::logistic(trolley_logit_p2)
+
+trolley_p4 <- psych::logistic(trolley_logit_p4) - psych::logistic(trolley_logit_p3)
+
+trolley_p5 <- psych::logistic(trolley_logit_p5) - psych::logistic(trolley_logit_p4)
+
+trolley_p6 <- psych::logistic(trolley_logit_p6) - psych::logistic(trolley_logit_p5)
+
+trolley_p7 <- 1 - trolley_p1 - trolley_p2 - trolley_p3 - trolley_p4 - trolley_p5 - trolley_p6
+
+
+trolley_prob <- cbind(trolley_p1, trolley_p2, trolley_p3, trolley_p4, trolley_p5, trolley_p6, trolley_p7)
 
 ##distribution
 
+distribution(trolley_response_1) <- categorical(trolley_prob)
 
 ##model
+trolley_model_1 <- model(trolley_bA, trolley_bC, trolley_bI, trolley_c1, trolley_c2, trolley_c3, trolley_c4, trolley_c5, trolley_c6)
 
+inits <- replicate(4, 
+                   initials(trolley_c1 = -3, trolley_c2 = -2.5, trolley_c3 = -2, trolley_c4 = -1.5, trolley_c5 = -1, trolley_c6 = -0.5, trolley_bA = -1, trolley_bI = -1, trolley_bC = -1),
+                   simplify = FALSE)
 
 ##draws
+trolley_draws_1 <- greta::mcmc(trolley_model_1, n_samples = 3000, initial_values = inits)
+
+summary(trolley_draws_1)
 
 ```
 
+
+## Chapter 12.2 Zero-inflated outcomes
+```{r}
+#data
+# define parameters
+prob_drink <- 0.2 # 20% of days
+rate_work <- 1    # average 1 manuscript per day
+# sample one year of production
+N <- 365
+# simulate days monks drink
+drink <- rbinom( N , 1 , prob_drink )
+# simulate manuscripts completed
+y <- (1-drink)*rpois( N , rate_work )
+
+## data
+mix_df <- data.frame(y)
+mix_df <- mix_df %>%
+  mutate(y_factor = as.factor(y))
+
+mix_y_factor <- model.matrix(~ y_factor - 1, mix_df)
+
+mix_df_zeros <- mix_y_factor[,1]
+mix_df_ones <- mix_y_factor[,2]
+mix_df_twos <- mix_y_factor[,3]
+mix_df_threes <- mix_y_factor[,4]
+mix_df_fours <- mix_y_factor[,5]
+mix_df_sixs <- mix_y_factor[,6]
+
+
+## prior
+log_rate <- normal(0, 10)
+logit_drink <- normal(0, 1)
+
+mix_rate <- exp(log_rate)
+mix_prob_drink <- psych::logistic(logit_drink)
+
+#mix_drink <- binomial(length_zeros, mix_prob_drink)
+
+## operation
+#mix_p_zero <- mix_drink * 1 + (1 - mix_drink) * exp(- mix_rate)
+mix_p_zero <- mix_prob_drink * 1 + (1 - mix_prob_drink) * exp(- mix_rate)
+
+mix_p_one <- (1 - mix_prob_drink) * mix_rate * exp(- mix_rate)
+
+mix_p_two <- (1 - mix_prob_drink) * mix_rate^2 * exp(- mix_rate) / factorial(2)
+
+mix_p_three <- (1 - mix_prob_drink) * mix_rate^3 * exp(- mix_rate) / factorial(3)
+
+mix_p_four <- (1 - mix_prob_drink) * mix_rate^4 * exp(- mix_rate) / factorial(4)
+
+mix_p_six<- (1 - mix_prob_drink) * mix_rate^6 * exp(- mix_rate) / factorial(6)
+
+distribution(mix_df_zeros) <- bernoulli(mix_p_zero)
+distribution(mix_df_ones) <- bernoulli(mix_p_one)
+distribution(mix_df_twos) <- bernoulli(mix_p_two)
+distribution(mix_df_threes) <- bernoulli(mix_p_three)
+distribution(mix_df_fours) <- bernoulli(mix_p_four)
+distribution(mix_df_sixs) <- bernoulli(mix_p_six)
+
+mix_model <- model(log_rate, logit_drink)
+
+mix_draws <- greta::mcmc(mix_model, n_samples = 1000)
+
+summary(mix_draws)
+```
 
 
 ##Chapter 13.1 Multilevel tadpoles: Reedfrogs dataset with aggregated binomial
@@ -1436,13 +1562,15 @@ chimp_cov_actor_R <- lkj_correlation(4,dimension = 3)
 
 chimp_cov_actor_sigma_vector <- chimp_cov_actor_diag_matrix %*% chimp_cov_actor_R %*% chimp_cov_actor_diag_matrix
 
-#chimp_cov_actor_L <- chol(chimp_cov_actor_sigma_vector)
+chimp_cov_actor_L <- chol(chimp_cov_actor_sigma_vector)
 
-#chimp_cov_actor_intercept_slope_alpha <- multivariate_normal(mean = t(chimp_cov_mean_vector), Sigma = diag(3), n_realisations = chimp_cov_num_actor)
+chimp_cov_actor_intercept_slope_alpha <- normal(0, 1, dim = c(7, 3))
 
-#chimp_cov_actor_intercept_slope <- chimp_cov_actor_intercept_slope_alpha  %*% chimp_cov_actor_L
+chimp_cov_actor_intercept_slope <-  chimp_cov_actor_intercept_slope_alpha  %*% chimp_cov_actor_L
 
-chimp_cov_actor_intercept_slope <- multivariate_normal(mean = t(chimp_cov_mean_vector), Sigma = chimp_cov_actor_sigma_vector, n_realisations = chimp_cov_num_actor)
+
+
+#chimp_cov_actor_intercept_slope <- multivariate_normal(mean = t(chimp_cov_mean_vector), Sigma = chimp_cov_actor_sigma_vector, n_realisations = chimp_cov_num_actor)
 
 #prior for block
 chimp_cov_sigma_a_block <- cauchy(0, 2, truncation = c(0, Inf))
@@ -1456,13 +1584,15 @@ chimp_cov_block_R <- lkj_correlation(4,dimension = 3)
 
 chimp_cov_block_sigma_vector <- chimp_cov_block_diag_matrix %*% chimp_cov_block_R %*% chimp_cov_block_diag_matrix
 
-#chimp_cov_block_L <- chol(chimp_cov_block_sigma_vector)
+chimp_cov_block_L <- chol(chimp_cov_block_sigma_vector)
 
-#chimp_cov_block_intercept_slope_alpha <- multivariate_normal(mean = t(chimp_cov_mean_vector), Sigma = diag(3), n_realisations = chimp_cov_num_block)
+chimp_cov_block_intercept_slope_alpha <- normal(0, 1, dim = c(6,3))
 
-#chimp_cov_block_intercept_slope <- chimp_cov_block_intercept_slope_alpha  %*% chimp_cov_block_L 
+chimp_cov_block_intercept_slope <- chimp_cov_block_intercept_slope_alpha  %*% chimp_cov_block_L 
 
-chimp_cov_block_intercept_slope <- multivariate_normal(mean = t(chimp_cov_mean_vector), Sigma = chimp_cov_block_sigma_vector, n_realisations = chimp_cov_num_block)
+
+
+#chimp_cov_block_intercept_slope <- multivariate_normal(mean = t(chimp_cov_mean_vector), Sigma = chimp_cov_block_sigma_vector, n_realisations = chimp_cov_num_block)
 
 ##operations
 chimp_cov_a_i <- chimp_cov_a + chimp_cov_actor_intercept_slope[,1][chimp_cov_actor_id] * chimp_cov_sigma_a_actor + chimp_cov_block_intercept_slope[,1][chimp_cov_block_id] * chimp_cov_sigma_a_block
@@ -1480,9 +1610,10 @@ distribution(chimp_cov_y_i) <- binomial(1, chimp_cov_p_i)
 chimp_cov_model <- model(chimp_cov_a, chimp_cov_bp, chimp_cov_bpc, chimp_cov_sigma_a_actor, chimp_cov_sigma_a_block, chimp_cov_sigma_bp_actor, chimp_cov_sigma_bp_block, chimp_cov_sigma_bpc_actor, chimp_cov_sigma_bpc_block, chimp_cov_actor_intercept_slope, chimp_cov_block_intercept_slope)
 
 #draws
-chimp_cov_draws <- greta::mcmc(chimp_cov_model, one_by_one = TRUE)
+chimp_cov_draws <- greta::mcmc(chimp_cov_model, n_samples = 5000)
 
 summary(chimp_cov_draws)
+mcmc_trace(chimp_cov_draws, pars = "chimp_cov_sigma_a_actor")
 
 #tidy draws
 chimp_cov_draws_df <- tidy_draws(chimp_cov_draws)
@@ -1619,8 +1750,6 @@ summary(milk_miss_draws_2)
 milk_miss_draws_1_df <- tidy_draws(milk_miss_draws_1)
 ```
 
-## New
-```{r}
 
-```
+
 
