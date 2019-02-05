@@ -1618,38 +1618,6 @@ chimp_cov_draws_df <- tidy_draws(chimp_cov_draws)
 
 #create long-formated dataset
 
-
-#Create log-likelihood matrix for model 1
-chimp_cov_drawSampleIDs <- sample(1:nrow(chimp_cov_draws_df), size = 500)
-
-#create log likelihood matrix for model 3
-Admit_cov_log_likelihood_matrix_3 <- Admit_cov_draws_3 %>%
-  gather_draws(Admit_cov_intercept_slope[dept_id, intercept]) %>%
-  spread(key = intercept, value = .value) %>%
-  rename(intercept = "1", slope = "2") %>%
-  left_join(long_Admit) %>%
-  filter(.draw %in% Admit_cov_drawSampleIDs) %>%
-  mutate(p = psych::logistic(intercept + slope * male),
-         den = dbinom(x = admited, size = 1, prob = p),
-         log_likelihood = log(den)) %>%
-  .$log_likelihood %>%
-  matrix(ncol = 500)
-
-# Calculate WAIC and put them in matrix
-Admit_cov_comp <- rbind(WAIC_greta(), WAIC_greta(Admit_cov_log_likelihood_matrix_3))
-
-Admit_cov_comp$model <- c("model1", "model2")
-
-# Sort WAIC in ascending 
-Admit_cov_sorted_comp <- Admit_cov_comp[order(Admit_cov_comp$WAIC),]
-
-# Calculate weight of each model
-Admit_cov_sorted_comp <- Admit_cov_sorted_comp %>%
-  mutate(w_1 = exp(-0.5 * WAIC),
-         weight = round(w_1 / sum(w_1),2)) %>%
-  select(model, WAIC, pWAIC, se, n_obs, weight, -w_1)
-
-Admit_cov_sorted_comp
 ```
 
 
